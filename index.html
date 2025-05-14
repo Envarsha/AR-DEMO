@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebAR Image Tracking Video Player with Overlay</title>
+
+  <!-- Import A-Frame -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+
+  <!-- Import MindAR Image Tracking -->
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.2/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+    }
+    
+    /* Overlay styles */
+    .overlay-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: rgba(0, 0, 0, 0.7);
+      z-index: 10;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+    
+    .overlay-icon {
+      width: 120px;
+      height: 120px;
+      background-color: rgba(0, 150, 0, 0.8);
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    .scan-animation {
+      border: 4px solid white;
+      width: 80%;
+      height: 140%;
+      position: relative;
+      border-radius: 10px;
+    }
+    
+    .scan-line {
+      position: absolute;
+      height: 2px;
+      width: 100%;
+      background-color: #00ff00;
+      top: 0;
+      animation: scan 2s infinite ease-in-out;
+    }
+    
+    @keyframes scan {
+      0% { top: 0; }
+      50% { top: 100%; }
+      100% { top: 0; }
+    }
+    
+    .qr-hint {
+      margin-top: 20px;
+      font-size: 18px;
+      opacity: 0.9;
+    }
+    
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Overlay that shows before target recognition -->
+  <div id="tracking-overlay" class="overlay-container">
+    <div class="overlay-icon">
+      <div class="scan-animation">
+        <div class="scan-line"></div>
+      </div>
+    </div>
+    <div class="qr-hint">Point your camera at the target image</div>
+  </div>
+
+  <!-- A-Frame Scene -->
+  <a-scene
+    mindar-image="imageTargetSrc: ./targets.mind; filterMinCF:0.0001; filterBeta: 0.01; missTolerance: 10;"
+    color-space="sRGB"
+    renderer="colorManagement: true, physicallyCorrectLights: true"
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false">
+
+    <!-- Camera -->
+    <a-camera position="0 0 0" look-controls="enabled: false"
+              cursor="fuse: false; rayOrigin: mouse;"
+              raycaster="far: 10000; objects: .clickable"></a-camera>
+
+    <!-- Target #0 -->
+    <a-entity mindar-image-target="targetIndex: 0">
+      <a-plane
+        id="video-plane-0"
+        class="clickable"
+        position="0 0 0"
+        rotation="0 0 0"
+        material="shader: flat; side: double; transparent: true; opacity: 0">
+      </a-plane>
+    </a-entity>
+
+    <!-- Target #1 -->
+    <a-entity mindar-image-target="targetIndex: 1">
+      <a-plane
+        id="video-plane-1"
+        class="clickable"
+        position="0 0 0"
+        rotation="0 0 0"
+        material="shader: flat; side: double; transparent: true; opacity: 0">
+      </a-plane>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    const videoConfig = [
+      {
+        targetIndex: 0,
+        videoUrl: "./videos/video1.mp4",
+        planeId: "video-plane-0"
+      },
+      {
+        targetIndex: 1,
+        videoUrl: "./videos/video2.mp4",
+        planeId: "video-plane-1"
+      }
+    ];
+
+    window.addEventListener('DOMContentLoaded', function () {
+      const sceneEl = document.querySelector('a-scene');
+      const trackingOverlay = document.getElementById('tracking-overlay');
+
+      // Initialize tracking state
+      let targetsFound = videoConfig.map(() => false);
+      
+      sceneEl.addEventListener('loaded', function () {
+        console.log("A-Frame scene loaded");
+
+        videoConfig.forEach(config => {
+          setupVideoTarget(config);
+        });
+      });
+
+      document.addEventListener('visibilitychange', function () {
+        videoConfig.forEach(config => {
+          const videoElement = document.querySelector(`#${config.planeId}`).getObject3D('mesh').material.map?.image;
+          if (videoElement && document.hidden) {
+            if (!videoElement.paused) videoElement.pause();
+          }
+        });
+      });
+    });
+
+    function setupVideoTarget(config) {
+      const plane = document.querySelector(`#${config.planeId}`);
+      const targetEntity = document.querySelector(`a-entity[mindar-image-target="targetIndex: ${config.targetIndex}"]`);
+      const trackingOverlay = document.getElementById('tracking-overlay');
+
+      const video = document.createElement("video");
+      video.src = config.videoUrl;
+      video.playsInline = true;
+      video.loop = true;
+      video.setAttribute("preload", "auto");
+      video.muted = false; // Ensure audio is not muted
+
+      // Create video texture
+      const texture = new THREE.VideoTexture(video);
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.format = THREE.RGBFormat;
+
+      // Apply video texture to plane
+      plane.getObject3D('mesh').material.map = texture;
+      plane.getObject3D('mesh').material.opacity = 1;
+
+      // Handle audio context activation
+      const enableAudio = () => {
+        // Create a temporary audio context to unlock audio on iOS
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Create and immediately play a short silent buffer
+        const buffer = audioContext.createBuffer(1, 1, 22050);
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.start(0);
+        
+        // Remove the audio activation event listeners
+        document.removeEventListener('touchstart', enableAudio);
+        document.removeEventListener('click', enableAudio);
+      };
+      
+      // Add event listeners for user interaction to enable audio
+      document.addEventListener('touchstart', enableAudio, { once: true });
+      document.addEventListener('click', enableAudio, { once: true });
+
+      // Handle target found event
+      targetEntity.addEventListener("targetFound", function () {
+        console.log(`Target ${config.targetIndex} found`);
+        trackingOverlay.classList.add('hidden');
+        
+        // Get target dimensions from the image-target system || IMPORTANT
+        const imageRatio = video.videoHeight / video.videoWidth || 16/9; // Default ratio if video metadata not loaded
+        const targetWidth = 1;
+        const targetHeight = targetWidth * imageRatio;
+        
+        // Set video plane dimensions to match target exactly
+        plane.setAttribute("width", targetWidth);
+        plane.setAttribute("height", targetHeight);
+        
+        // Try to play with audio enabled
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.log("Autoplay with audio prevented:", error);
+            // If autoplay with audio fails, try muted first then unmute
+            video.muted = true;
+            video.play().then(() => {
+              // Try to unmute after user interaction
+              const unmute = () => {
+                video.muted = false;
+                document.removeEventListener('touchstart', unmute);
+                document.removeEventListener('click', unmute);
+              };
+              document.addEventListener('touchstart', unmute, { once: true });
+              document.addEventListener('click', unmute, { once: true });
+            }).catch(err => console.log("Even muted autoplay failed:", err));
+          });
+        }
+      });
+
+      targetEntity.addEventListener("targetLost", function () {
+        console.log(`Target ${config.targetIndex} lost`);
+        video.pause();
+        
+        // Check if all targets are lost to show overlay again
+        const allTargetsLost = document.querySelectorAll('a-entity[mindar-image-target]').length === 
+                              document.querySelectorAll('a-entity[mindar-image-target][visible="false"]').length;
+        
+        if (allTargetsLost) {
+          trackingOverlay.classList.remove('hidden');
+        }
+      });
+    }
+  </script>
+</body>
+</html>
